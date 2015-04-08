@@ -186,14 +186,31 @@ static void deref_data(SV *data) {
    data = NULL;
 }
 
+static prefix_t *prev_prefix;
+
 static size_t
 patricia_walk_inorder_perl(patricia_node_t *node, SV *coderef) {
     dSP;
     size_t n = 0;
 
+    if ((patricia_node_t *)0 == node) {
+       return 0;
+    }
+
     if (node->l) {
          n += patricia_walk_inorder_perl(node->l, coderef);
     }
+
+#if 0 /* { */
+	    if (node->prefix) {
+    	        fprintf (stderr, "patricia_walk_inorder_perl: %s/%d\n", 
+	                 prefix_toa (node->prefix), node->prefix->bitlen);
+	        prev_prefix = node->prefix;
+	    } else {
+    	        fprintf (stderr, "patricia_walk_inorder_perl: [%s/%d]\n", 
+			 prefix_toa (prev_prefix), node->bit);
+            }
+#endif /* } */
 
     if (node->prefix) {
         if (NULL != coderef) {
@@ -208,6 +225,108 @@ patricia_walk_inorder_perl(patricia_node_t *node, SV *coderef) {
 	
     if (node->r) {
          n += patricia_walk_inorder_perl(node->r, coderef);
+    }
+
+    return n;
+}
+
+patricia_walk_inorder_3args_perl(patricia_node_t *node, SV *coderef, SV *internal_coderef) {
+    dSP;
+    size_t n = 0;
+
+    if ((patricia_node_t *)0 == node) {
+       return 0;
+    }
+
+    if (node->l) {
+         n += patricia_walk_inorder_3args_perl(node->l, coderef, internal_coderef);
+    }
+
+    if (node->prefix) {
+        if (SvOK(coderef)) {
+            PUSHMARK(SP);
+            XPUSHs(sv_mortalcopy((SV *)node->data));
+            XPUSHs(sv_2mortal(newSViv(node->bit)));
+	    if (node->parent) {
+            	XPUSHs(sv_2mortal(newSViv(node->parent->bit)));
+	    } else {
+            	XPUSHs(sv_2mortal(newSViv(-1)));
+	    }
+            PUTBACK;
+            perl_call_sv(coderef, G_VOID|G_DISCARD);
+            SPAGAIN;
+            n++;
+        }
+    } else {
+        if (SvOK(internal_coderef)) {
+            PUSHMARK(SP);
+            XPUSHs(&PL_sv_undef);
+            XPUSHs(sv_2mortal(newSViv(node->bit)));
+	    if (node->parent) {
+            	XPUSHs(sv_2mortal(newSViv(node->parent->bit)));
+	    } else {
+            	XPUSHs(sv_2mortal(newSViv(-1)));
+	    }
+            PUTBACK;
+            perl_call_sv(internal_coderef, G_VOID|G_DISCARD);
+            SPAGAIN;
+            n++;
+        }
+    }
+	
+    if (node->r) {
+         n += patricia_walk_inorder_3args_perl(node->r, coderef, internal_coderef);
+    }
+
+    return n;
+}
+
+patricia_limit_walk_inorder_3args_perl(patricia_node_t *node, size_t depth, SV *coderef, SV *internal_coderef) {
+    dSP;
+    size_t n = 0;
+
+    if ((patricia_node_t *)0 == node) {
+       return 0;
+    }
+
+    if (node->l && node->bit < depth) {
+         n += patricia_limit_walk_inorder_3args_perl(node->l, depth, coderef, internal_coderef);
+    }
+
+    if (node->prefix) {
+        if (SvOK(coderef)) {
+            PUSHMARK(SP);
+            XPUSHs(sv_mortalcopy((SV *)node->data));
+            XPUSHs(sv_2mortal(newSViv(node->bit)));
+	    if (node->parent) {
+            	XPUSHs(sv_2mortal(newSViv(node->parent->bit)));
+	    } else {
+            	XPUSHs(sv_2mortal(newSViv(-1)));
+	    }
+            PUTBACK;
+            perl_call_sv(coderef, G_VOID|G_DISCARD);
+            SPAGAIN;
+            n++;
+        }
+    } else {
+        if (SvOK(internal_coderef)) {
+            PUSHMARK(SP);
+            XPUSHs(&PL_sv_undef);
+            XPUSHs(sv_2mortal(newSViv(node->bit)));
+	    if (node->parent) {
+            	XPUSHs(sv_2mortal(newSViv(node->parent->bit)));
+	    } else {
+            	XPUSHs(sv_2mortal(newSViv(-1)));
+	    }
+            PUTBACK;
+            perl_call_sv(internal_coderef, G_VOID|G_DISCARD);
+            SPAGAIN;
+            n++;
+        }
+    }
+	
+    if (node->r && node->bit < depth) {
+         n += patricia_limit_walk_inorder_3args_perl(node->r, depth, coderef, internal_coderef);
     }
 
     return n;
@@ -332,7 +451,12 @@ climb(tree, ...)
 		} else if (2 < items) {
 	           croak("Usage: Net::Patricia::climb(tree[,CODEREF])");
 		}
-		PATRICIA_WALK (tree->head, node) {
+		PATRICIA_WALK_ALL (tree->head, node) {
+	    if (node->prefix) {
+#if 0 /* { */
+    	        fprintf (stderr, "climb PATRICIA_WALK_ALL: %s/%d\n", 
+	                 prefix_toa (node->prefix), node->prefix->bitlen);
+#endif /* } */
 		   if (NULL != func) {
 		      PUSHMARK(SP);
 		      XPUSHs(sv_mortalcopy((SV *)node->data));
@@ -341,6 +465,13 @@ climb(tree, ...)
 		      SPAGAIN;
 		   }
 		   n++;
+	    }
+#if 0 /* { */
+	      else {
+    	        fprintf (stderr, "climb PATRICIA_WALK_ALL: /%u\n", 
+			 node->bit);
+            }
+#endif /* } */
 		} PATRICIA_WALK_END;
 		RETVAL = n;
 	OUTPUT:	
@@ -352,14 +483,42 @@ climb_inorder(tree, ...)
 	PREINIT:
 		size_t n = 0;
 		SV *func = NULL;
+		SV *internal_func = NULL;
 	CODE:
 		func = NULL;
 		if (2 == items) {
 		   func = ST(1);
-		} else if (2 < items) {
-	           croak("Usage: Net::Patricia::climb_inorder(tree[,CODEREF])");
+                   n = patricia_walk_inorder_perl(tree->head, func);
+		} else if (3 == items) {
+		   func = ST(1);
+		   internal_func = ST(2);
+                   n = patricia_walk_inorder_3args_perl(tree->head, func, internal_func);
+		} else if (3 < items) {
+	           croak("Usage: Net::Patricia::climb_inorder(tree[,CODEREF[,CODEREF]])");
+                   /*NOTREACHED*/
 		}
-                n = patricia_walk_inorder_perl(tree->head, func);
+		RETVAL = n;
+	OUTPUT:	
+		RETVAL
+
+size_t
+climb_inorder_limit(tree, limit, ...)
+	Net::Patricia			tree
+	size_t				limit
+	PREINIT:
+		size_t n = 0;
+		SV *func = NULL;
+		SV *internal_func = NULL;
+	CODE:
+		func = NULL;
+		if (4 == items) {
+		   func = ST(2);
+		   internal_func = ST(3);
+                   n = patricia_limit_walk_inorder_3args_perl(tree->head, limit, func, internal_func);
+		} else if (4 < items) {
+	           croak("Usage: Net::Patricia::climb_inorder_limit(tree, limit[,CODEREF[,CODEREF]])");
+                   /*NOTREACHED*/
+		}
 		RETVAL = n;
 	OUTPUT:	
 		RETVAL
@@ -535,3 +694,45 @@ DESTROY(tree)
 	Net::Patricia			tree
 	CODE:
 	Destroy_Patricia(tree, deref_data);
+
+void
+inet_hton(af, host)
+	int	      af
+	const char *  host
+	CODE:
+#ifdef HAS_INETPTON
+	int ok;
+	int addrlen = 0;
+#ifdef AF_INET6
+	struct in6_addr ip_address;
+#else
+	struct in_addr ip_address;
+#endif
+
+	switch(af) {
+	  case AF_INET:
+	    addrlen = 4;
+	    break;
+#ifdef AF_INET6
+	  case AF_INET6:
+	    addrlen = 16;
+	    break;
+#endif
+	  default:
+		croak("Bad address family for %s, got %d, should be"
+#ifdef AF_INET6
+		      " either AF_INET or AF_INET6",
+#else
+		      " AF_INET",
+#endif
+		      "Net::Patricia::inet_hton", af);
+	}
+	ok = (*host != '\0') && my_inet_pton(af, host, &ip_address);
+
+	ST(0) = sv_newmortal();
+	if (ok) {
+		sv_setpvn( ST(0), (char *)&ip_address, addrlen);
+	}
+#else
+	ST(0) = (SV*)not_here("inet_hton");
+#endif

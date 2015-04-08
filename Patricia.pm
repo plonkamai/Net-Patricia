@@ -17,7 +17,7 @@
 #  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
 #  MA  02110-1301, USA.
 
-# Dave Plonka <plonka@doit.wisc.edu>
+# Dave Plonka <plonka@cs.wisc.edu>
 # Philip Prindeville <philipp@redfish-solutions.com>
 # Anton Berezin <tobez@tobez.org>
 
@@ -247,7 +247,7 @@ sub add {
   croak "add: wrong number of args" if (@_ < 2 || @_ > 4);
   my ($self, $ip, $bits, $data) = @_;
   $data = (defined $bits ? "$ip/$bits" : $ip) if (@_ < 3);
-  my $packed = inet_pton(AF_INET6, $ip);
+  my $packed = Net::Patricia::inet_hton(AF_INET6, $ip);
   croak("invalid key") unless (defined $packed);
   $bits = 128 if (@_ < 4);
   $self->SUPER::_add(AF_INET6, $packed, $bits, $data);
@@ -281,7 +281,7 @@ sub exact_integer {
 sub match {
   croak "match: wrong number of args" if (@_ < 2 || @_ > 3);
   my ($self, $ip, $bits) = @_;
-  my $packed = inet_pton(AF_INET6, $ip);
+  my $packed = Net::Patricia::inet_hton(AF_INET6, $ip);
   croak("invalid key") unless (defined $packed);
   $bits = 128 if (@_ < 3);
   $self->SUPER::_match(AF_INET6, $packed, $bits);
@@ -290,7 +290,7 @@ sub match {
 sub exact {
   croak "exact: wrong number of args" if (@_ < 2 || @_ > 3);
   my ($self, $ip, $bits) = @_;
-  my $packed = inet_pton(AF_INET6, $ip);
+  my $packed = Net::Patricia::inet_hton(AF_INET6, $ip);
   croak("invalid key") unless (defined $packed);
   $bits = 128 if (@_ < 3);
   $self->SUPER::_exact(AF_INET6, $packed, $bits);
@@ -299,7 +299,7 @@ sub exact {
 sub remove {
   croak "remove: wrong number of args" if (@_ < 2 || @_ > 3);
   my ($self, $ip, $bits) = @_;
-  my $packed = inet_pton(AF_INET6, $ip);
+  my $packed = Net::Patricia::inet_hton(AF_INET6, $ip);
   croak("invalid key") unless (defined $packed);
   $bits = 128 if (@_ < 3);
   $self->SUPER::_remove(AF_INET6, $packed, $bits);
@@ -332,6 +332,9 @@ Net::Patricia - Patricia Trie perl module for fast IP address lookups
   $pt->match_exact_integer(2130706432, 8); # 127.0.0.0
   $pt->remove_string('127.0.0.0/8');
   $pt->climb(sub { print "climbing at node $_[0]\n" });
+  $pt->climb_inorder(
+         sub { print "value '$_[0]': bits=$_[1], parent bits=$_[2]\n" },
+         sub { print "internal node: bits=$_[1], parent bits=$_[2]\n" });
 
   undef $pt; # automatically destroys the Patricia Trie
 
@@ -492,67 +495,135 @@ node.  The node's user data will be passed as the sole argument to that
 subroutine.
 
 This method returns the number of nodes successfully visited while
-climbing the Trie.  That is, without a CODEREF argument, it simply
+climbing the Trie.  Thus, without a CODEREF argument, it simply
 counts the number of nodes in the Patricia Trie.
 
-Note that currently the return value from your CODEREF subroutine is
-ignored.  In the future the climb method may return the number of times
-your subroutine returned non-zero, as it is called once per node.  So,
+Note that currently the return value from the CODEREF subroutine is
+ignored.  In the future, the climb method may return the number of times
+that subroutine returned non-zero, as it is called once per node.  So,
 if you are currently relying on the climb return value to accurately
 report a count of the number of nodes in the Patricia Trie, it would be
-prudent to have your subroutine return a non-zero value.
+prudent to have the subroutine return a non-zero value.
 
 This method is called climb() rather than walk() because climbing trees
 (and therfore tries) is a more popular pass-time than walking them.
 
 =item B<climb_inorder>
 
-   $pt->climb_inorder([CODEREF]);
+   $pt->climb_inorder([CODEREF,[INTERNAL_NODE_CODEREF]]);
 
 This method climbs the Patricia Trie, visiting each node in order as it
 does so.  That is, it performs an "inorder" traversal.
 
-The CODEREF argument is optional.  It is a perl code reference used to
-specify a user-defined subroutine to be called when visiting each
-node.  The node's user data will be passed as the sole argument to that
-subroutine.
+The CODEREF and INTERNAL_NODE_CODEREF arguments are optional.
+If supplied, each is a perl code reference used to specify a user-defined
+subroutine to be called when visiting a node.  If only CODEREF is supplied,
+the node's user data will be passed as the sole argument to that subroutine.
 
-This method returns the number of nodes successfully visited while
-climbing the Trie.  That is, without a CODEREF argument, it simply
-counts the number of nodes in the Patricia Trie.
+Supplying both a CODEREF argument and an INTERNAL_NODE_CODEREF argument
+indicates that you are interested in the internal structure of the
+Patricia Trie.  The CODEREF-specified subroutine will be called when
+visiting each node that has user data (i.e., those nodes representing
+values that were explicitly added to the trie) and the
+INTERNAL_NODE_CODEREF-specified subroutine will be called when visiting
+the other nodes, i.e., those nodes that do not store data but, rather, are
+part of the trie's internal structure.
 
-Note that currently the return value from your CODEREF subroutine is
+The first argument passed to the INTERNAL_NODE_CODEREF subroutine will
+be undef, indicating an "internal" node, thus having no explicit
+corresponding value.  (Note that this makes it reasonable to supply
+the same subroutine reference as both INTERNAL_NODE_CODEREF and CODEREF
+if you wish, since the first argument to that subroutine will indicate
+the calling context, i.e., it will be undef for internal nodes.)
+The second argument will by the number of bits
+that the given internal node represents. The third argument will be the
+number of bits of the parent node.  This parent bits value will be -1
+in the case when the node being visited has no parent, i.e., when
+visiting a root internal node or when there is only one value currently
+stored in the Patricia Trie.
+
+When both the CODEREF and INTERNAL_NODE_CODEREF arguments are supplied,
+those additional (second and third) arguments will be passed to the
+CODEREF subroutine as well.
+
+This method returns the number of times subroutines specified as
+arguments are called nodes successfully when visiting nodes while
+climbing the Trie.  Thus, this would returns zero:
+
+   $pt->climb_inorder;
+
+While this would return the number of nodes representing values
+explicitly added to the trie:
+
+   $pt->climb_inorder(sub {1});
+
+Whereas, this would return the number of internal nodes only, i.e.,
+those nodes that do not represent values explicitly added to the tree:
+
+   $pt->climb_inorder(undef, sub {1});
+
+Lastly, this would return the total number of nodes, both explicitly
+added and internal:
+
+   $pt->climb_inorder(sub {1}, sub {1});
+
+Note that currently the return value from the subroutines are
 ignored.  In the future the climb method may return the number of times
-your subroutine returned non-zero, as it is called once per node.  So,
+those subroutine returned non-zero, as it is called once per node.  So,
 if you are currently relying on the climb return value to accurately
 report a count of the number of nodes in the Patricia Trie, it would be
-prudent to have your subroutine return a non-zero value.
+prudent to have such subroutines return a non-zero value.
 
 This method is called climb() rather than walk() because climbing trees
 (and therfore tries) is a more popular pass-time than walking them.
+
+=item B<climb_inorder_limit>
+
+   $pt->climb_inorder_limit(LIMIT_BITS, [CODEREF,[INTERNAL_NODE_CODEREF]]);
+
+This method climbs the Patricia Trie, visiting each node in order as it
+does so, limited to the number of bits "depth" specified by LIMIT_BITS.
+Otherwise, it performs an "inorder" traversal like climb_inorder method.
+
+Thus, invoking climb_inorder is equivalent to invoking climb_inorder_limit
+with an initial argument of 128, i.e., the maximum number of bits in an
+IP[v6] prefix.
 
 =back
 
 =head2 Serialization
 
 Net::Patricia trees, unlike many classes with XS-level data, can be
-frozen and thawed using Storable.
+frozen and thawed using Storable.  For example:
+
+   use Net::Patricia;
+   use Storable qw(nstore);
+   my $pt = new Net::Patricia;
+   # ...
+   nstore $pt, 'myFile.npt';
+   exit;
+
+And in another script later:
+
+   use Net::Patricia;
+   use Storable qw(retrieve);
+   my $pt = retrieve('myFile.npt');
 
 =head1 BUGS
 
 When passing a CODEREF argument to the climb method, the return value
-from your CODEREF subroutine is currently ignored.  In the future the
-climb method may return the number of times your subroutine returned
+from the CODEREF subroutine is currently ignored.  In the future the
+climb method may return the number of times that subroutine returned
 non-zero, as it is called once per node.  So, if you are currently
 relying on the climb return value to accurately report a count of the
-number of nodes in the Patricia Trie, it would be prudent to have your
-subroutine return a non-zero value.
+number of nodes in the Patricia Trie, it would be prudent to have such
+subroutines return a non-zero value.
 
-=head1 AUTHOR
+=head1 AUTHORS
 
-Dave Plonka <plonka@doit.wisc.edu>
-Philip Prindeville <philipp@redfish-solutions.com>
-Anton Berezin <tobez@tobez.org>
+   Dave Plonka <plonka@cs.wisc.edu>
+   Philip Prindeville <philipp@redfish-solutions.com>
+   Anton Berezin <tobez@tobez.org>
 
 Copyright (C) 2000-2005  Dave Plonka.  Copyright (C) 2009  Dave Plonka
 & Philip Prindeville.  This program is free software; you
@@ -562,9 +633,9 @@ version 2 of the License, or (at your option) any later version.
 
 This product includes software developed by the University of Michigan,
 Merit Network, Inc., and their contributors.  See the copyright file in
-the patricialib sub-directory of the distribution for details.
+the libpatricia sub-directory of the distribution for details.
 
-patricialib, the C library used by this perl extension, is an extracted
+libpatricia, the C library used by this perl extension, is an extracted
 version of MRT's patricia code from radix.[ch], which was worked on by
 Masaki Hirabaru and Craig Labovitz.  For more info on MRT see:
 
@@ -575,7 +646,7 @@ in turn owes something to the BSD kernel.
 
 =head1 SEE ALSO
 
-perl(1), Socket, Net::Netmask, Text::Trie, Tree::Trie.
+perl(1), Socket, Net::Netmask, Net::CIDR::Lite, Text::Trie, Tree::Trie.
 
 Tree::Radix and Net::RoutingTable are modules by Daniel Hagerty
 <hag@linnaean.org> written entirely in perl, unlike this module.  At

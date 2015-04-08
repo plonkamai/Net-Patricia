@@ -61,6 +61,57 @@ comp_with_mask (void *addr, void *dest, u_int mask)
     return (0);
 }
 
+#define IN6ADDRSZ       16
+#define INADDRSZ         4
+#define INT16SZ          2
+
+/* int
+ * inet_hton6(src, dst)
+ *      convert hex_ip format address to network order binary form,
+ *      like inet_pton[6].  Based on code by Paul Vixie, 1996.
+ */
+static int
+inet_hton6(const char *src, unsigned char *dst)
+{
+  static const char xdigits_l[] = "0123456789abcdef",
+    xdigits_u[] = "0123456789ABCDEF";
+  unsigned char tmp[IN6ADDRSZ], *tp, *endp;
+  const char *xdigits, *curtok;
+  int ch, saw_xdigit;
+  unsigned int val;
+
+  memset((tp = tmp), 0, IN6ADDRSZ);
+  endp = tp + IN6ADDRSZ;
+  curtok = src;
+  saw_xdigit = 0;
+  val = 0;
+  while((ch = *src++) != '\0') {
+    const char *pch;
+
+    if((pch = strchr((xdigits = xdigits_l), ch)) == NULL)
+      pch = strchr((xdigits = xdigits_u), ch);
+    if(pch != NULL) {
+      val <<= 4;
+      val |= (pch - xdigits);
+      saw_xdigit++;
+      if(4 == saw_xdigit) {
+        if(tp + INT16SZ > endp)
+          return (0);
+        *tp++ = (unsigned char) (val >> 8) & 0xff;
+        *tp++ = (unsigned char) val & 0xff;
+        saw_xdigit = 0;
+        val = 0;
+      }
+      continue;
+    }
+    return (0);
+  }
+  if(tp != endp)
+    return (0);
+  memcpy(dst, tmp, IN6ADDRSZ);
+  return (1);
+}
+
 /* this allows imcomplete prefix */
 int
 my_inet_pton (int af, const char *src, void *dst)
@@ -92,7 +143,11 @@ my_inet_pton (int af, const char *src, void *dst)
         return (1);
 #ifdef HAVE_IPV6
     } else if (af == AF_INET6) {
-        return (inet_pton (af, src, dst));
+        if (32 == strspn(src, "0123456789abcdefABCDEF")) { /* hex_ip IPv6 addr? */
+            return inet_hton6(src, dst);
+            /* NOTREACHED */
+        }
+        return inet_pton(af, src, dst);
 #endif /* HAVE_IPV6 */
     } else {
 #ifndef NT
@@ -438,6 +493,15 @@ patricia_walk_inorder(patricia_node_t *node, void_fn_t func)
     if (node->l) {
          n += patricia_walk_inorder(node->l, func);
     }
+
+#ifdef PATRICIA_DEBUG
+	    if (node->prefix)
+    	        fprintf (stderr, "patricia_walk_inorder: %s/%d\n", 
+	                 prefix_toa (node->prefix), node->prefix->bitlen);
+	    else
+    	        fprintf (stderr, "patricia_walk_inorder: at %u\n", 
+			 node->bit);
+#endif /* PATRICIA_DEBUG */
 
     if (node->prefix) {
 	func(node->prefix, node->data);

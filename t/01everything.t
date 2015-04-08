@@ -10,7 +10,7 @@ use Storable;
 
 our $debug = 1;
 
-plan tests => 48;
+plan tests => 64;
 
 # Insert your test code below (better if it prints "ok 13"
 # (correspondingly "not ok 13") depending on the success of chunk 13
@@ -119,8 +119,66 @@ for my $o ({ name => "original", obj => $t }, { name => "thawed", obj => $thawed
     is($o->{obj}->match_string("2001:220::/128"), "hello, world", "$o->{name}: looking for 2001:220::/128");
 }
 
+# test that "hex_ip" strings work:
+ok($t->add_string("2001:DB8::/32", "RFC3849"), "adding 2001:DB8::/32");
+ok($t->match_string("2001:db8::"), "looking for 2001:db8::");
+ok($t->match_string("2001:0db8:0000:0000:0000:0000:0000:0000"), "looking for 2001:0db8:0000:0000:0000:0000:0000:0000");
+ok($t->match_string("20010db8000000000000000000000000"), "looking for 20010db8000000000000000000000000");
 undef $t;
 undef $thawed;
+
+{
+my $t = new Net::Patricia(AF_INET6);
+# { These IP addresses below were chosen so that the trie contains three nodes,
+#   two nodes with values and one "internal" node, the root, representing
+#   "::/0", i.e., like this:
+#
+#                  [::/0]
+#                  /    \
+#      0:0:0:dead::     a000:0:0:beef::
+#   
+#   The following tests depend on this structure.
+$t->add_string("0:0:0:dead::");
+$t->add_string("a000:0:0:beef::");
+# }
+ok(2 == $t->climb(sub {1}), 'node count');
+
+{
+my $argCount = 0;
+my $matchArgs = 0;
+ok(2 == $t->climb(sub { $argCount = scalar(@_); if ($_[0] =~ m/dead|beef/) { $matchArgs++}; 1 }), 'climb callback');
+ok(1 == $argCount, 'climb callback arg count');
+ok(2 == $matchArgs, 'climb callback arg 0');
+}
+
+{
+my $argCount = 0;
+my $argValue = '';
+ok(2 == $t->climb_inorder(sub { $argCount = scalar(@_); $argValue = $_[0]; 1}), 'node count, inorder');
+ok(1 == $argCount, 'climb inorder callback arg count');
+like($argValue, qr/beef/, 'climb inorder callback arg value');
+}
+
+{
+my $argCount = 0;
+my @rootBits;
+my $callback = sub {
+   $argCount = scalar(@_);
+   if (!defined($_[0]) and -1 == $_[2]) {
+      push(@rootBits, $_[1]);
+   }
+   1
+};
+ok(3 == $t->climb_inorder($callback, $callback), 'climb inorder two callbacks node count');
+ok(3 == $argCount, 'climb inorder two callbacks arg count');
+ok(1 == @rootBits, 'climb inorder two callbacks root visit count');
+ok(0 == $rootBits[0], 'climb inorder two callbacks root bits');
+}
+
+ok(1 == $t->climb_inorder_limit(0, sub {1}, sub {1}), 'climb inorder limit two callbacks node count');
+
+undef $t;
+}
 
 done_testing();
 
