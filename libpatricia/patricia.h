@@ -37,6 +37,8 @@ typedef void (*void_fn_t)();
 #  include <netinet/in.h> /* for struct in_addr */
 #endif
 
+int my_inet_pton(int af, const char *src, void *dst);
+
 #include <sys/socket.h> /* for AF_INET */
 
 /* { from mrt.h */
